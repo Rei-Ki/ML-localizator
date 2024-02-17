@@ -1,4 +1,7 @@
 dataset/images/
 dataset/masks/
+fonts/
+image-data/
+saved-model/
 
 videos/

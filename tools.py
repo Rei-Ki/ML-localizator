@@ -6,10 +6,10 @@ from tensorflow.keras.layers import Conv2D, LeakyReLU, BatchNormalization, \
     Dropout, ReLU, Conv2DTranspose
 
 
-def create_model(SAMPLE_SIZE, CLASSES):
+def create_model(SAMPLE_SIZE, CLASSES, channels=3):
     ## Обозначим основные блоки модели
     def input_layer():
-        return tf.keras.layers.Input(shape=SAMPLE_SIZE + (3,))
+        return tf.keras.layers.Input(shape=SAMPLE_SIZE + (channels,))
 
     def downsample_block(filters, size, batch_norm=True):
         initializer = tf.keras.initializers.GlorotNormal()
