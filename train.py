@@ -1,9 +1,16 @@
+import io
 import os
+
+from tools import create_model, show_images_and_masks
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
 import glob
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import Conv2D, LeakyReLU, BatchNormalization, \
+    Dropout, ReLU, Conv2DTranspose
 import matplotlib.pyplot as plt
 
 from skimage import measure
@@ -15,18 +22,27 @@ from skimage.draw import polygon_perimeter
 
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 
-# Default paths.
-# DEFAULT_LABEL_FILE = os.path.join(SCRIPT_PATH, './labels/2350-common-hangul.txt')
+# Стандартные пути
+DEFAULT_LABEL_FILE = os.path.join(SCRIPT_PATH, './labels/2350-common-hangul.txt')
+DEFAULT_MODEL_DIR = os.path.join(SCRIPT_PATH, 'saved-model')
 
 
+MODEL_NAME = 'hangul-localizator'
+IMAGE_WIDTH = 64
+IMAGE_HEIGHT = 64
 
-## Подготовим набор данных для обучения
+TRAIN_EXAMPLES = 2000
+
+# Подготовим набор данных для обучения
+# Это будет определяться количеством записей в данном файле меток
+# CLASSES = 2350
+# labels = io.open(DEFAULT_LABEL_FILE, 'r', encoding='utf-8').read().splitlines()
+# num_classes = len(labels)
 CLASSES = 8
 
-COLORS = ['black', 'red', 'lime',
-          'blue', 'orange', 'pink',
-          'cyan', 'magenta']
-
+# COLORS = ['black', 'red', 'lime', 'blue', 'orange', 'pink', 'cyan', 'magenta']
+# SAMPLE_SIZE = (IMAGE_WIDTH, IMAGE_HEIGHT)
+COLORS = ['pink']
 SAMPLE_SIZE = (256, 256)
 
 OUTPUT_SIZE = (1080, 1920)
@@ -70,137 +86,6 @@ def augmentate_images(image, masks):
     
     return image, masks
 
-
-images = sorted(glob.glob('SemanticSegmentationLesson/dataset/images/*.jpg'))
-masks = sorted(glob.glob('SemanticSegmentationLesson/dataset/masks/*.png'))
-
-images_dataset = tf.data.Dataset.from_tensor_slices(images)
-masks_dataset = tf.data.Dataset.from_tensor_slices(masks)
-
-dataset = tf.data.Dataset.zip((images_dataset, masks_dataset))
-
-dataset = dataset.map(load_images, num_parallel_calls=tf.data.AUTOTUNE)
-dataset = dataset.repeat(60)
-dataset = dataset.map(augmentate_images, num_parallel_calls=tf.data.AUTOTUNE)
-
-
-## Посмотрим на содержимое набора данных
-images_and_masks = list(dataset.take(5))
-
-fig, ax = plt.subplots(nrows = 2, ncols = 5, figsize=(16, 6))
-
-for i, (image, masks) in enumerate(images_and_masks):
-    ax[0, i].set_title('Image')
-    ax[0, i].set_axis_off()
-    ax[0, i].imshow(image)
-        
-    ax[1, i].set_title('Mask')
-    ax[1, i].set_axis_off()    
-    ax[1, i].imshow(image/1.5)
-   
-    for channel in range(CLASSES):
-        contours = measure.find_contours(np.array(masks[:,:,channel]))
-        for contour in contours:
-            ax[1, i].plot(contour[:, 1], contour[:, 0], linewidth=1, color=COLORS[channel])
-
-plt.show()
-plt.close()
-
-## Разделим набор данных на обучающий и проверочный
-train_dataset = dataset.take(2000).cache()
-test_dataset = dataset.skip(2000).take(100).cache()
- 
-train_dataset = train_dataset.batch(8)
-test_dataset = test_dataset.batch(8)
-
-## Обозначим основные блоки модели
-def input_layer():
-    return tf.keras.layers.Input(shape=SAMPLE_SIZE + (3,))
-
-def downsample_block(filters, size, batch_norm=True):
-    initializer = tf.keras.initializers.GlorotNormal()
-
-    result = tf.keras.Sequential()
-    
-    result.add(
-      tf.keras.layers.Conv2D(filters, size, strides=2, padding='same',
-                             kernel_initializer=initializer, use_bias=False))
-
-    if batch_norm:
-        result.add(tf.keras.layers.BatchNormalization())
-    
-    result.add(tf.keras.layers.LeakyReLU())
-    return result
-
-def upsample_block(filters, size, dropout=False):
-    initializer = tf.keras.initializers.GlorotNormal()
-
-    result = tf.keras.Sequential()
-    
-    result.add(
-        tf.keras.layers.Conv2DTranspose(filters, size, strides=2, padding='same',
-                                        kernel_initializer=initializer, use_bias=False))
-
-    result.add(tf.keras.layers.BatchNormalization())
-    
-    if dropout:
-        result.add(tf.keras.layers.Dropout(0.25))
-    
-    result.add(tf.keras.layers.ReLU())
-    return result
-
-def output_layer(size):
-    initializer = tf.keras.initializers.GlorotNormal()
-    return tf.keras.layers.Conv2DTranspose(CLASSES, size, strides=2, padding='same',
-                                           kernel_initializer=initializer, activation='sigmoid')
-
-
-## Построим U-NET подобную архитектуру
-inp_layer = input_layer()
-
-downsample_stack = [
-    downsample_block(64, 4, batch_norm=False),
-    downsample_block(128, 4),
-    downsample_block(256, 4),
-    downsample_block(512, 4),
-    downsample_block(512, 4),
-    downsample_block(512, 4),
-    downsample_block(512, 4),
-]
-
-upsample_stack = [
-    upsample_block(512, 4, dropout=True),
-    upsample_block(512, 4, dropout=True),
-    upsample_block(512, 4, dropout=True),
-    upsample_block(256, 4),
-    upsample_block(128, 4),
-    upsample_block(64, 4)
-]
-
-out_layer = output_layer(4)
-
-# Реализуем skip connections
-x = inp_layer
-
-downsample_skips = []
-
-for block in downsample_stack:
-    x = block(x)
-    downsample_skips.append(x)
-    
-downsample_skips = reversed(downsample_skips[:-1])
-
-for up_block, down_block in zip(upsample_stack, downsample_skips):
-    x = up_block(x)
-    x = tf.keras.layers.Concatenate()([x, down_block])
-
-out_layer = out_layer(x)
-
-unet_like = tf.keras.Model(inputs=inp_layer, outputs=out_layer)
-
-tf.keras.utils.plot_model(unet_like, show_shapes=True, dpi=72)
-
-
 ## Определим метрики и функции потерь
 def dice_mc_metric(a, b):
     a = tf.unstack(a, axis=3)
@@ -224,15 +109,56 @@ def dice_bce_mc_loss(a, b):
     return 0.3 * dice_mc_loss(a, b) + tf.keras.losses.binary_crossentropy(a, b)
 
 
-## Компилируем модель
-unet_like.compile(optimizer='adam', loss=[dice_bce_mc_loss], metrics=[dice_mc_metric])
-
-## Обучаем нейронную сеть и сохраняем результат
-history_dice = unet_like.fit(train_dataset, validation_data=test_dataset, epochs=25, initial_epoch=0)
-
-unet_like.save_weights('SemanticSegmentationLesson/networks/unet_like')
-
-## Загружаем обученную модель
-unet_like.load_weights('SemanticSegmentationLesson/networks/unet_like')
+def main(use_checkpoint=1):
+    model_chkpt_step_path = os.path.join(DEFAULT_MODEL_DIR, f"epoch{{epoch:02d}}-{MODEL_NAME}.h5")
+    model_save_path = os.path.join(DEFAULT_MODEL_DIR, f"{MODEL_NAME}.h5")
 
 
+    images = sorted(glob.glob(os.path.join(SCRIPT_PATH, './dataset/images/*.jpg')))
+    masks = sorted(glob.glob(os.path.join(SCRIPT_PATH, './dataset/masks/*.png')))
+    
+    print("Lens ")
+    print(len(images), len(masks))
+
+    images_dataset = tf.data.Dataset.from_tensor_slices(images)
+    masks_dataset = tf.data.Dataset.from_tensor_slices(masks)
+
+    dataset = tf.data.Dataset.zip((images_dataset, masks_dataset))
+
+    dataset = dataset \
+        .map(load_images, num_parallel_calls=tf.data.AUTOTUNE) \
+        .repeat(60) \
+        .map(augmentate_images, num_parallel_calls=tf.data.AUTOTUNE)
+
+    # Разделим набор данных на обучающий и проверочный
+    train_dataset = dataset.take(TRAIN_EXAMPLES).cache()
+    test_dataset = dataset.skip(TRAIN_EXAMPLES).take(100).cache()
+    
+    train_dataset = train_dataset.batch(8)
+    test_dataset = test_dataset.batch(8)
+
+    show_images_and_masks(dataset, CLASSES, COLORS)
+
+    unet_like = create_model(SAMPLE_SIZE=SAMPLE_SIZE, CLASSES=CLASSES)
+
+
+
+    unet_like.compile(optimizer='adam', loss=[dice_bce_mc_loss], metrics=[dice_mc_metric])
+
+    checkpoint_step = ModelCheckpoint(model_chkpt_step_path, save_freq='epoch')
+
+    if use_checkpoint == 1 and os.path.exists(model_save_path):
+        print(f"\nВключено использование чекпоинтов.\nЗагрузка модели...")
+        model = load_model(model_save_path)
+        print(f"Модель загружена из файла: {model_save_path}\n")
+
+
+    ## Обучаем нейронную сеть и сохраняем результат
+    unet_like.fit(train_dataset, validation_data=test_dataset, epochs=25,
+                                 callbacks=[checkpoint_step])
+
+    unet_like.save(model_save_path)
+
+
+if __name__ == '__main__':
+    main()
