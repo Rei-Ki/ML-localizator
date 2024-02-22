@@ -4,10 +4,14 @@ from pathlib import Path
 import random
 import argparse
 import numpy as np
+import json
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
 from scipy.ndimage import gaussian_filter, map_coordinates
 from multiprocessing import Process, current_process
+import matplotlib.pyplot as plt
+import cv2
+import time
 
 SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 
@@ -18,204 +22,117 @@ DEFAULT_OUTPUT_DIR = os.path.join(SCRIPT_PATH, './image-data')
 DEFAULT_MASK_DIR = os.path.join(SCRIPT_PATH, './image-data/hangul-masks')
 DEFAULT_WORKERS = 1
 
-# Number of random distortion images to generate per font and character.
-DISTORTION_COUNT = 12
-
 # Width and height of the resulting image.
 IMAGE_WIDTH = 128
 IMAGE_HEIGHT = 128
 
-NUM_IMAGES = 1
+NUM_SYMBOLS = 5
 
-def elastic_distort(image, alpha, sigma):
-    """Perform elastic distortion on an image.
 
-    Here, alpha refers to the scaling factor that controls the intensity of the
-    deformation. The sigma variable refers to the Gaussian filter standard
-    deviation.
-    """
-    random_state = np.random.default_rng()
-    shape = image.shape
+default_json = {
+  "version": "4.5.7",
+  "flags": {},
+  "shapes": [],
+  "imagePath": "",
+  "imageData": None,
+  "imageHeight": IMAGE_HEIGHT,
+  "imageWidth": IMAGE_WIDTH
+}
 
-    dx = gaussian_filter(
-        (random_state.random(shape) * 2 - 1),
-        sigma, mode="constant", cval=0
-    ) * alpha
-    dy = gaussian_filter(
-        (random_state.random(shape) * 2 - 1),
-        sigma, mode="constant", cval=0
-    ) * alpha
+default_points = {
+      "label": "1",
+      "points": [],
+      "group_id": None,
+      "shape_type": "rectangle",
+      "flags": {}
+    }
 
-    x, y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]))
-    indices = np.reshape(y+dy, (-1, 1)), np.reshape(x+dx, (-1, 1))
-    return map_coordinates(image, indices, order=1).reshape(shape)
 
-def generate_hangul_images_for_mask(output_dir, fonts, image_dir, list_labels, index_start, name):
-    import random
+def get_actual_font(w, h, font_i, font_size, characters):
+    while w > IMAGE_WIDTH - 20 or h > IMAGE_HEIGHT:
+        font_size -= 5
+        font = ImageFont.truetype(font_i, font_size)
+        w, h = font.getbbox("".join(characters))[2:4]
+    return font_size
 
-    all_fonts_sizes = [50]
 
-    with open(os.path.join(output_dir, f'thread-{name}-labels-map.csv'), 'w', encoding='utf-8') as labels_csv:
-        total_count = index_start
-        prev_count = index_start
+def generate_images_on_font(total_count, font_i, characters, fonts_sizes, name, image_dir, labels_csv, thread_work):
+    for font_size in fonts_sizes:
+        total_count += 1
+        image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
+        drawing = ImageDraw.Draw(image)
+
+        # todo потом сделать еще и разное расстояние между буквами
+        spacing = 2
+        points = []
+
+        # Получаем размеры всего слова
+        font = ImageFont.truetype(font_i, font_size)
+        w, h = font.getbbox("".join(characters))[2:4]
         
-        font_i = fonts[0]
-        for _ in range(NUM_IMAGES):  # NUM_IMAGES - это количество изображений, которые вы хотите создать
-            # Выберите 5 случайных символов из list_labels
-            
-            characters = random.sample(list_labels, random.randint(2, 5))
-            # Print image count roughly every 5000 images.
-            if total_count - prev_count > 5000:
-                prev_count = total_count
-                print(f'{total_count} изображений сгенерировано ({name})...')
-            
-            for font_size in all_fonts_sizes:
-                total_count += 1
-                image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
-                drawing = ImageDraw.Draw(image)
-                
-                for i, character in enumerate(characters):
-                    font = ImageFont.truetype(font_i, font_size)
-                    w, h = font.getbbox(character)[2:4]
-                    # Расположите символы по горизонтали на изображении
-                    drawing.text(
-                        (i * IMAGE_WIDTH // 5 + (IMAGE_WIDTH // 5 - w) / 2, (IMAGE_HEIGHT - h) / 2),
-                        character, fill=(0), font=font
-                    )
-                    
-                file_string = f'hangul_{name}_{total_count}.jpeg'
-                file_path = os.path.join(image_dir, file_string)
-                image.save(file_path, 'JPEG')
-                # Сохраните каждую маску в отдельном файле
+        # Проверяем, влезает ли слово в изображение
+        font_size = get_actual_font(w, h, font_i, font_size, characters)
+        
+        for i, character in enumerate(characters):
+            font = ImageFont.truetype(font_i, font_size)
+            w, h = font.getbbox(character)[2:4]
+            # Расположите символы по горизонтали на изображении
+            x = ((i + 1) * (IMAGE_WIDTH - spacing) // (len(characters) + 1)) - w // 2 + spacing // 2
+            y = (IMAGE_HEIGHT - h) / 2
+            drawing.text((x, y), character, fill=(0), font=font)
 
-                # Запишите все символы в CSV
-                labels_csv.write(f'{file_path},{"".join(characters)}\n')
+            # Запись точек прямоугольника
+            point = default_points.copy()
+            point["label"] = character
+            point["points"] = [[x, y], [x + w, y + h]]
+            points.append(point)
+        
+        file_string = f'hangul_{name}_{total_count}.jpeg'
+        file_json = f'hangul_{name}_{total_count}.json'
+        file_path = os.path.join(image_dir, file_string)
+        file_json = os.path.join(image_dir, file_json)
+        image.save(file_path, 'JPEG')
+        
+        # Преобразование кортежа в список
+        dumped = default_json.copy()
+        dumped["shapes"] = points
+        dumped["imagePath"] = file_path
+        # Сохранение списка в JSON файл
+        with open(file_json, 'w') as f:
+            json.dump(dumped, f)
+        
+        labels_csv.write(f'{file_path},{file_json}\n')
 
-
-def generate_hangul_images_mask_many(output_dir, fonts, image_dir, list_labels, index_start, name):
-    import random
-
-    all_fonts_sizes = [53]
-
-    with open(os.path.join(output_dir, f'thread-{name}-labels-map.csv'), 'w', encoding='utf-8') as labels_csv:
-        total_count = index_start
-        prev_count = index_start
-
-        for _ in range(NUM_IMAGES):  # NUM_IMAGES - это количество изображений, которые вы хотите создать
-            # Выберите 5 случайных символов из list_labels
-            # characters = random.sample(list_labels, random.randint(2, 5))
-            characters = random.sample(list_labels, 1)
-            # Print image count roughly every 5000 images.
-            if total_count - prev_count > 5000:
-                prev_count = total_count
-                print(f'{total_count} изображений сгенерировано ({name})...')
-            
-            for font_i in fonts:
-                for font_size in all_fonts_sizes:
-                    total_count += 1
-                    image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
-                    drawing = ImageDraw.Draw(image)
-                    masks = []  # Список для хранения масок каждого символа
-                    
-                    for i, character in enumerate(characters):
-                        font = ImageFont.truetype(font_i, font_size)
-                        w, h = font.getbbox(character)[2:4]
-                        # Расположите символы по горизонтали на изображении
-                        drawing.text(
-                            # (i * IMAGE_WIDTH // 5 + (IMAGE_WIDTH // 5 - w) / 2, (IMAGE_HEIGHT - h) / 2),
-                            ((IMAGE_WIDTH-w)/2, (IMAGE_HEIGHT-h)/2),
-                            character, fill=(0), font=font
-                        )
-                        # Создайте маску для этого символа
-
-                        mask = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
-                        mask_drawing = ImageDraw.Draw(mask)
-                        # x1 = i * IMAGE_WIDTH // 5 + (IMAGE_WIDTH // 5 - w) / 2
-                        x1 = (IMAGE_WIDTH-w)/2
-                        y1 = (IMAGE_HEIGHT - h) / 2
-                        x2 = x1 + w
-                        y2 = y1 + h
-                        # Рисуйте прямоугольник вокруг символа
-                        mask_drawing.rectangle([x1, y1, x2, y2], outline=(0))
-
-                        masks.append(mask)
-                    # file_string = f'hangul_{name}_{total_count}.jpeg'
-                    # file_path = os.path.join(image_dir, file_string)
-                    # image.save(file_path, 'JPEG')
-                    # Сохраните каждую маску в отдельном файле
-
-                    masks_name = []
-                    for j, mask in enumerate(masks):
-                        mask_file_string = f'hangul_{name}_{total_count}_mask{j}.jpeg'
-                        masks_name.append(os.path.join(DEFAULT_MASK_DIR, mask_file_string))
-                        mask_file_path = os.path.join(DEFAULT_MASK_DIR, mask_file_string)  # Предполагается, что mask_dir - это путь к каталогу для сохранения масок
-                        
-                        file_string = f'hangul_{name}_{total_count}_image{j}.jpeg'
-                        file_path = os.path.join(image_dir, file_string)
-                        image.save(file_path, 'JPEG')
-                        
-                        mask.save(mask_file_path, 'JPEG')
-                        labels_csv.write(f'{file_path},{mask_file_path}\n')
-
-                    # Запишите все символы в CSV
-                    # labels_csv.write(f'{file_path},{",".join(masks_name)}\n')
+        if DEFAULT_WORKERS == 1:
+            print(f'{total_count} / {thread_work} ({(total_count/thread_work*100):.2f}%) ({name})', end='\r')
+    return total_count
 
 
 def generate_hangul_images(output_dir, fonts, image_dir, list_labels, index_start, name):
-    print(f'\nStart generating images...')
+    all_fonts_sizes = [53, 50, 46, 36, 30]
+    # thread_work = NUM_SYMBOLS * len(list_labels) * len(fonts) * len(all_fonts_sizes)
+    thread_work = len(list_labels) * len(fonts) * len(all_fonts_sizes)
     
-    # all_fonts_sizes = [53, 50, 46, 36, 30]
-    all_fonts_sizes = [53]
-
+    print(f'{0} / {thread_work} ({(0/thread_work*100):.2f}%) ({name})', end='\r')
     with open(os.path.join(output_dir, f'thread-{name}-labels-map.csv'), 'w', encoding='utf-8') as labels_csv:
         total_count = index_start
         prev_count = index_start
-        for character in list_labels:
-            # Print image count roughly every 5000 images.
+
+        for _ in list_labels:
+            # for i in range(1, NUM_SYMBOLS + 1):
+            # characters = random.sample(list_labels, i)
+            characters = random.sample(list_labels, random.randint(1, 8))
+            
             if total_count - prev_count > 5000:
                 prev_count = total_count
-                print(f'{total_count} изображений сгенерировано ({name})...')
-
+                if DEFAULT_WORKERS == 1:
+                    print(f'{total_count} / {thread_work} ({(total_count/thread_work*100):.2f}%) ({name})', end='\r')
+                else:
+                    print(f'{total_count} / {thread_work} ({(total_count/thread_work*100):.2f}%) ({name})')
+            
             for font_i in fonts:
-                for font_size in all_fonts_sizes:
-                    total_count += 1
-                    image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=0)
-                    font = ImageFont.truetype(font_i, font_size)
-                    drawing = ImageDraw.Draw(image)
-                    w, h = font.getbbox(character)[2:4]
-                    drawing.text(
-                        ((IMAGE_WIDTH-w)/2, (IMAGE_HEIGHT-h)/2),
-                        character, fill=(255), font=font
-                    )
-                    file_string = f'hangul_{name}_{total_count}.jpeg'
-                    file_path = os.path.join(image_dir, file_string)
-                    image.save(file_path, 'JPEG')
-                    labels_csv.write(f'{file_path},{character}\n')
-
-                    # for _ in range(DISTORTION_COUNT):
-                    #     total_count += 1
-                    #     file_string = f'hangul_{name}_{total_count}.jpeg'
-                    #     file_path = os.path.join(image_dir, file_string)
-                    #     arr = np.array(image)
-                        
-                    #     distorted_array = elastic_distort(
-                    #         arr, alpha=random.randint(25, 36),
-                    #         sigma=random.randint(5, 6)
-                    #     )
-                    #     distorted_image = Image.fromarray(distorted_array)
-
-                    #     # Поворот изображения
-                    #     rotated_image = distorted_image.rotate(random.uniform(-15, 15))
-
-                    #     # Смещение изображения
-                    #     dx, dy = random.randint(-10, 12), random.randint(-8, 15)
-                    #     matrix = (1, 0, dx, 0, 1, dy)
-                    #     transformed_image = rotated_image.transform(rotated_image.size, Image.AFFINE, matrix)
-
-                    #     transformed_image.save(file_path, 'JPEG')
-                    #     labels_csv.write(f'{file_path},{character}\n')
-
-        print(f'Процесса завершил генерацию {total_count} изображений.\n')
+                total_count = generate_images_on_font(total_count, font_i, 
+                        characters, all_fonts_sizes, name, image_dir, labels_csv, thread_work)
 
 
 def concat_outputs(output_dir):
@@ -230,6 +147,7 @@ def concat_outputs(output_dir):
 
 def main(label_file, fonts_dir, output_dir, workers):
     """Generate Hangul images."""
+    DEFAULT_WORKERS = workers
 
     with open(label_file, 'r', encoding='utf-8') as f:
         labels = f.read().splitlines()
@@ -259,10 +177,8 @@ def main(label_file, fonts_dir, output_dir, workers):
     for i in range(workers):
         print(f'Запуск процесса {i}')
         process.append(
-            Process(target=generate_hangul_images_mask_many, name=f'process {i}', daemon=True,
+            Process(target=generate_hangul_images, name=f'process {i}', daemon=True,
                     args=(output_dir, fonts, image_dir, list_works[i], list_indexes[i], f'ps{i}',)))
-            # Process(target=generate_hangul_images, name=f'process {i}', daemon=True,
-            #         args=(output_dir, fonts, image_dir, list_works[i], list_indexes[i], f'ps{i}',)))
 
     for i in range(workers):
         process[i].start()
