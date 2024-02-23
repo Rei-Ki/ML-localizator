@@ -34,7 +34,6 @@ DEFAULT_MODEL_DIR = os.path.join(SCRIPT_PATH, 'saved-model/')
 
 DEFAULT_LABEL_CSV_FILE = os.path.join(SCRIPT_PATH, './image-data/labals-map.csv')
 DEFAULT_OUTPUT_DIR = os.path.join(SCRIPT_PATH, './image-data/hangul-images/')
-DEFAULT_MASK_DIR = os.path.join(SCRIPT_PATH, './image-data/hangul-masks/')
 DEFAULT_TFRECORDS_DIR = os.path.join(SCRIPT_PATH, './output-tfrecords/')
 
 MODEL_NAME = 'hangul-localizator'
@@ -116,12 +115,7 @@ class LocalizationModel(tf.keras.Model):
         with tf.GradientTape() as tape_box:
             pred = self.model(x, training=True)
             pred = tf.reshape(pred, [-1, self.frames, 4])
-            
             loss = IoU_Loss(true_boxes, pred, frames=self.frames)
-            # loss = IoU_Loss_one(true_boxes, pred)
-            # print(pred.shape)
-            # print(true_boxes.shape)
-            # loss = tf.reduce_mean(tf.square(true_boxes - pred))
         # Backpropagation.
         grads = tape_box.gradient(loss, self.model.trainable_variables)
         self.box_optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
@@ -147,6 +141,9 @@ class LocalizationModel(tf.keras.Model):
                     num_elements = step + 1
                 print(f"Epoch: {epoch}/{epochs} | {step+1:_}/{num_elements:_} | loss: {loss/loss_count:.4f}", end="\r")
             hist = np.append(hist, loss/loss_count)
+            
+            model_chkpt_step_path = os.path.join(DEFAULT_MODEL_DIR, f"epoch{epoch}-{MODEL_NAME}.h5")
+            self.model.save(model_chkpt_step_path)
         return hist
     
     def testing(self, dataset, sourse_frame=False):
@@ -186,7 +183,8 @@ def main(tfrecord_dir, use_checkpoint=1):
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
 
-    model_chkpt_step_path = os.path.join(DEFAULT_MODEL_DIR, f"epoch{{epoch:02d}}-{MODEL_NAME}.h5")
+    os.makedirs(DEFAULT_MODEL_DIR, exist_ok=True)
+    
     model_save_path = os.path.join(DEFAULT_MODEL_DIR, f"{MODEL_NAME}.h5")
 
     # Создание датасета
@@ -210,7 +208,7 @@ def main(tfrecord_dir, use_checkpoint=1):
     plt.show()
     model.testing(test_dataset)
     
-    # model.model.save(f"{MODEL_NAME}.h5")
+    model.model.save(f"{model_save_path}")
     
     # model.model.load_weights(f"{MODEL_NAME}.h5")
     # model.testing(test_dataset)
