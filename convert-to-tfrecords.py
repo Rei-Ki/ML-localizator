@@ -66,14 +66,6 @@ class TFRecordsConverter(object):
         self.all_images = len(self.filenames)
 
 
-    def convert_type(self):
-        local_coords = []
-        for i in range(len(self.coords)):
-            tmp = np.squeeze(np.array(coords_l[i])).astype(np.float32)
-            local_coords.append(tmp)
-        pickle.dump(local_coords, open('coords.pkl', 'wb'))
-
-
     def process_image_labels(self, images_dir):
         """Эта функция создаст два перемешанных списка для изображений и меток.
 
@@ -98,8 +90,8 @@ class TFRecordsConverter(object):
             
             with open(json_name, 'r') as f:  # Загружаем JSON файл
                 objects = ijson.items(f, 'shapes.item.points')
-                coords_local = np.array(list(objects)[0]).astype(np.float32)
-            
+                coords_local = np.array(list(objects)).astype(np.float32)
+                
             coords.append(coords_local)
             images_path.append(file_name)
 
