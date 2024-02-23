@@ -26,7 +26,7 @@ DEFAULT_WORKERS = 1
 IMAGE_WIDTH = 128
 IMAGE_HEIGHT = 128
 
-NUM_SYMBOLS = 5
+NUM_SYMBOLS = 10
 
 
 default_json = {
@@ -109,8 +109,8 @@ def generate_images_on_font(total_count, font_i, characters, fonts_sizes, name, 
 
 
 def generate_hangul_images(output_dir, fonts, image_dir, list_labels, index_start, name):
-    # all_fonts_sizes = [53, 50, 46, 36, 30]
-    all_fonts_sizes = [46]
+    all_fonts_sizes = [53, 50, 46, 36, 30]
+    # all_fonts_sizes = [46]
     # thread_work = NUM_SYMBOLS * len(list_labels) * len(fonts) * len(all_fonts_sizes)
     thread_work = len(list_labels) * len(fonts) * len(all_fonts_sizes)
     
@@ -120,8 +120,6 @@ def generate_hangul_images(output_dir, fonts, image_dir, list_labels, index_star
         prev_count = index_start
 
         for _ in list_labels:
-            # for i in range(1, NUM_SYMBOLS + 1):
-            # characters = random.sample(list_labels, i)
             characters = random.sample(list_labels, random.randint(1, NUM_SYMBOLS + 1))
             
             if total_count - prev_count > 5000:
