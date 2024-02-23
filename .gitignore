@@ -1,8 +1,7 @@
 .vscode/
 __pycache__/
 
-filenames.pkl
-coords.pkl
+./*.pkl
 
 dataset/images/
 dataset/masks/
