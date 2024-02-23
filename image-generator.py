@@ -84,7 +84,7 @@ def generate_images_on_font(total_count, font_i, characters, fonts_sizes, name, 
             # Запись точек прямоугольника
             point = default_points.copy()
             point["label"] = character
-            point["points"] = [[x, y], [x + w, y + h]]
+            point["points"] = [x, y, x + w, y + h]
             points.append(point)
         
         file_string = f'hangul_{name}_{total_count}.jpeg'
@@ -109,7 +109,8 @@ def generate_images_on_font(total_count, font_i, characters, fonts_sizes, name, 
 
 
 def generate_hangul_images(output_dir, fonts, image_dir, list_labels, index_start, name):
-    all_fonts_sizes = [53, 50, 46, 36, 30]
+    # all_fonts_sizes = [53, 50, 46, 36, 30]
+    all_fonts_sizes = [46]
     # thread_work = NUM_SYMBOLS * len(list_labels) * len(fonts) * len(all_fonts_sizes)
     thread_work = len(list_labels) * len(fonts) * len(all_fonts_sizes)
     
@@ -121,7 +122,7 @@ def generate_hangul_images(output_dir, fonts, image_dir, list_labels, index_star
         for _ in list_labels:
             # for i in range(1, NUM_SYMBOLS + 1):
             # characters = random.sample(list_labels, i)
-            characters = random.sample(list_labels, random.randint(1, 8))
+            characters = random.sample(list_labels, random.randint(1, NUM_SYMBOLS + 1))
             
             if total_count - prev_count > 5000:
                 prev_count = total_count

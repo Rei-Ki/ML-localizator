@@ -30,7 +30,7 @@ IMAGE_SIZE = (128, 128)
 def load_image(image):
     image = tf.io.read_file(image)
     image = tf.image.decode_jpeg(image, channels=3)
-    image = tf.cast(image, tf.float32)/256
+    image = tf.cast(image, tf.float32)/255
     image = tf.image.resize(image, IMAGE_SIZE)
     return image
 
@@ -49,7 +49,7 @@ class TFRecordsConverter(object):
 
         print("Загрузка данных...")
         # Получить списки изображений и меток.
-        # self.filenames, self.coords = self.process_image_labels(images_dir)        
+        self.filenames, self.coords = self.process_image_labels(images_dir)        
 
         print("Загрузка имен изображений...")
         self.filenames  = pickle.load(open('filenames.pkl', 'rb'))
@@ -86,9 +86,8 @@ class TFRecordsConverter(object):
 
         images_path = []
         coords = []
-        # images_path = pickle.load(open('filenames.pkl', 'rb'))
-        # coords = pickle.load(open('coords.pkl', 'rb'))
         print(f"Уже обработано: {len(images_path)}")
+        # todo посмотреть что бы в координатах был массив из 4 элементов на одной позиции
         
         last_save = 0
         for i, file_name in enumerate(labels_csv):
@@ -96,7 +95,7 @@ class TFRecordsConverter(object):
             #     continue
             
             file_name, json_name = file_name.strip().split(',')
-
+            
             with open(json_name, 'r') as f:  # Загружаем JSON файл
                 objects = ijson.items(f, 'shapes.item.points')
                 coords_local = np.array(list(objects)[0]).astype(np.float32)

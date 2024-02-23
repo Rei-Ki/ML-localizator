@@ -15,6 +15,7 @@ from tensorflow.keras import Model
 from tensorflow.keras.layers import Conv2D, LeakyReLU, BatchNormalization, \
     Dropout, ReLU, Conv2DTranspose, Dense, Flatten, Input, Concatenate
 from tensorflow import keras
+from tools import IoU_Loss
 
 import matplotlib.pyplot as plt
 
@@ -42,13 +43,13 @@ MODEL_NAME = 'hangul-localizator'
 
 IMAGE_SIZE = (128, 128)
 BATCH_SIZE = 32
-FRAMES = 30
+FRAMES = 5
 
 
 def load_image(image):
     image = tf.io.read_file(image)
     image = tf.image.decode_jpeg(image, channels=3)
-    image = tf.cast(image, tf.float32)/256
+    image = tf.cast(image, tf.float32)/255
     image = tf.image.resize(image, IMAGE_SIZE)
     return image
 
@@ -72,31 +73,39 @@ def get_dataset():
     train_dataset = tf.data.TFRecordDataset(train_pattern) \
         .map(parse_record) \
         .shuffle(1000) \
-        .batch(BATCH_SIZE) \
-        .prefetch(1)
+        .batch(BATCH_SIZE) # \
+        # .prefetch(1)
 
     test_dataset = tf.data.TFRecordDataset(test_pattern) \
         .map(parse_record) \
-        .batch(BATCH_SIZE) \
-        .prefetch(1)
+        .batch(BATCH_SIZE) # \
+        # .prefetch(1)
     print("Датасет создан...")
     return train_dataset, test_dataset
 
 
 class LocalizationModel(tf.keras.Model):
     def __init__(self, frames=FRAMES):
-        super(Model, self).__init__()
+        super(LocalizationModel, self).__init__()
         self.frames = frames
-        self.nn_box = create_model(self.frames)
+        self.nn_box = self.create_model(self.frames)
         
         self.box_optimizer = tf.keras.optimizers.Adam(1e-4, clipnorm = 1.0)
     
     @tf.function
     def training_step(self, x, true_boxes):
         with tf.GradientTape() as tape_box:
+            print(x.shape)
+            print(true_boxes.shape)
+            
             pred = self.nn_box(x, training=True)
-            pred = tf.reshape(pred, [-1, self.frames, 3])
-
+            # pred = tf.reshape(pred, [-1, self.frames, 3])
+            print(x.shape)
+            print(pred.shape)
+            pred = tf.reshape(pred, [-1, self.frames, 4])
+            print(x.shape)
+            print(pred.shape)
+            
             loss = IoU_Loss(true_boxes, pred)
 
         # Backpropagation.
@@ -104,7 +113,7 @@ class LocalizationModel(tf.keras.Model):
         self.box_optimizer.apply_gradients(zip(grads, self.nn_box.trainable_variables))
         return loss
     
-    def create_model(frames):
+    def create_model(self, frames):
         inputs = Input((IMAGE_SIZE + (3,)))
         x = Conv2D(32,  3, activation='relu', padding='same')(inputs)
         x = Conv2D(64,  3, activation='relu', padding='same', strides = 2)(x)
@@ -126,7 +135,7 @@ class LocalizationModel(tf.keras.Model):
         pass
 
 
-    def testing():
+    def testing(self, dataset):
         """ Проверка работы """
         # todo не проверял
         for ii, cc in dataset.take(1):
@@ -137,7 +146,8 @@ class LocalizationModel(tf.keras.Model):
             for num in range(3):
                 i = ii[num]
                 
-                pred = tf.reshape(pred, [-1, self.frames, 3])
+                # pred = tf.reshape(pred, [-1, self.frames, 3])
+                pred = tf.reshape(pred, [-1, self.frames, 4])
                 c = pred[num]
 
                 ax = plt.subplot(1, 5, num+1)
@@ -152,8 +162,7 @@ class LocalizationModel(tf.keras.Model):
                     i = cv2.rectangle(i ,(bb0 ,bb[1] ),(bb2, bb[1] + (bb2- bb0)),(0,1,0),1)
                 plt.imshow(i)
             plt.show()
-    
-    
+
 
 
 def main(use_checkpoint=1):
@@ -167,46 +176,49 @@ def main(use_checkpoint=1):
     # Создание датасета
     train_dataset, test_dataset = get_dataset()
 
-    examples_train = sum(1 for _ in train_dataset)
-    examples_test = sum(1 for _ in train_dataset)
-    print(f"Набор данных train: {examples_train} | test: {examples_test}")
+    # examples_train = sum(1 for _ in train_dataset)
+    # examples_test = sum(1 for _ in train_dataset)
+    # print(f"Набор данных train: {examples_train} | test: {examples_test}")
 
+    # todo сначала сделать без нормализации, а потом с ней
+    
     model = LocalizationModel()
 
     # todo не проверял
     # пример работы
-    for i, c in dataset.take(1):
+    
+    print(train_dataset)
+    for i, c in train_dataset:
+        print("пример работы")
         print(tf.reduce_mean(model.training_step(i, c)))
+        print("окончание")
 
     # todo не проверял
-    model.testing()
+    model.testing(train_dataset)
 
     # todo не проверял
     # обучение, запихать его в класс модели
     # попробовать просто модель сделать с вот этой функцией потерь
-    from IPython.display import clear_output
-    hist = np.array(np.empty([0]))
-    epochs = 100
-    ff = 0
-    for epoch in range(1, epochs + 1):
-        loss = 0
-        lc = 0
-        for step, (i, c) in enumerate(dataset):
-            loss+=tf.reduce_mean(model.training_step(i,c))
-            lc+=1
-        clear_output(wait=True)
-        print(epoch)
-        hist = np.append(hist, loss/lc)
+    # from IPython.display import clear_output
+    # hist = np.array(np.empty([0]))
+    # epochs = 100
+    # ff = 0
+    # for epoch in range(1, epochs + 1):
+    #     loss = 0
+    #     lc = 0
+    #     for step, (i, c) in enumerate(train_dataset):
+    #         loss+=tf.reduce_mean(model.training_step(i,c))
+    #         lc+=1
+    #     clear_output(wait=True)
+    #     print(epoch)
+    #     hist = np.append(hist, loss/lc)
     
-        plt.plot(np.arange(0,len(hist)), hist)
-        plt.show()
-        model.testing()
+    #     plt.plot(np.arange(0,len(hist)), hist)
+    #     plt.show()
+    #     model.testing()
 
     # todo не проверял
-    model.nn_box.save('my_bb_model.h5')
-
-
-
+    # model.nn_box.save('my_bb_model.h5')
 
 
     # unet_like.compile(optimizer='adam', loss=[dice_bce_mc_loss], metrics=[dice_mc_metric])

@@ -4,13 +4,13 @@ import numpy as np
 import tensorflow as tf
 
 
-
-
-
 def IoU_Loss(true, pred):
     #(32, 5, 4)
     t1 = true
     t2 = pred
+    
+    # print(t1.shape)
+    # print(t2.shape)
     
     minx1, miny1, maxx1, maxy1 = tf.split(t1, 4, axis = 2)
     fminx, miny2, fmaxx = tf.split(t2, 3, axis = 2)
