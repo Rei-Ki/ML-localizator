@@ -26,6 +26,8 @@ DEFAULT_WORKERS = 8
 DEFAULT_IS_PROCESS = 0
 IMAGE_SIZE = (128, 128)
 
+FRAMES = 10
+
 
 def load_image(image):
     image = tf.io.read_file(image)
@@ -33,6 +35,21 @@ def load_image(image):
     image = tf.cast(image, tf.float32)/255
     image = tf.image.resize(image, IMAGE_SIZE)
     return image
+
+
+def coords_to_frames(array):
+    if array.shape[0] >= FRAMES:
+        raise ValueError(f"Количество символов на изображении превышает количество рамок {FRAMES}")
+    if array.shape[0] <= FRAMES:
+        need = FRAMES - array.shape[0]
+        if need == 0:
+            return array
+        
+        for i in range(need):
+            index = np.random.choice(array.shape[0])
+            random_row = array[index, :]
+            array = np.concatenate((array, [random_row]), axis=0)
+    return array
 
 
 class TFRecordsConverter(object):
@@ -92,6 +109,8 @@ class TFRecordsConverter(object):
                 objects = ijson.items(f, 'shapes.item.points')
                 coords_local = np.array(list(objects)).astype(np.float32)
                 
+            coords_local = coords_to_frames(coords_local)
+            
             coords.append(coords_local)
             images_path.append(file_name)
 
